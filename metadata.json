@@ -1,0 +1,5 @@
+{
+  "name": "inSync",
+  "description": "A refined student productivity dashboard that uses Gemini AI to orchestrate daily schedules, suggest micro-habits, and provide real-time growth insights based on task difficulty and priority.",
+  "requestFramePermissions": []
+}
