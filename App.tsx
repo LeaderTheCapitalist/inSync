@@ -285,7 +285,6 @@ export default function App() {
               <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wide hidden md:block">Busy Hours</span>
             </button>
             <div className="flex items-center gap-4">
-              <span className="text-[10px] font-bold text-slate-400 tracking-wide uppercase hidden lg:block">Cognitive Load</span>
               <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full border border-slate-100 shadow-sm transition-all duration-500 ${currentStatus.bg}`}>
                 <div className={`w-1.5 h-1.5 rounded-full animate-pulse ${currentStatus.color.replace('text', 'bg')}`}></div>
                 <span className={`text-sm font-black tracking-tight ${currentStatus.color}`}>{currentStatus.label}</span>
