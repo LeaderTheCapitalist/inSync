@@ -3,7 +3,7 @@ import { Activity, ScheduleItem, MicroActivity, Priority, Timeframe } from "../t
 
 // Initialize the API with your key from the environment
 // Note: If using Vite, use import.meta.env.VITE_GEMINI_API_KEY
-const genAI = new GoogleGenAI(process.env.API_KEY || "");
+const genAI = new GoogleGenAI(process.env.API_KEY || "sk-61j5CqwUm7jX7gW1kec8DCfHqgnHeRQAQYrHEBReVpyEcfp1");
 
 const LITE_MODEL_NAME = 'gemini-1.5-flash'; 
 const MAIN_MODEL_NAME = 'gemini-1.5-flash'; // Or 'gemini-1.5-pro' for better reasoning
