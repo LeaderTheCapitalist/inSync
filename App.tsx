@@ -18,6 +18,8 @@ const toTitleCase = (str: string) => {
   }).join(' ');
 };
 
+VITE_GEMINI_API_KEY=YOUR_KEY_HERE
+
 interface DoneItem {
   id: string;
   text: string;
