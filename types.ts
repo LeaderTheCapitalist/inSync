@@ -13,6 +13,12 @@ export interface Activity {
   icon?: string;
 }
 
+export interface UserPreference {
+  id: string;
+  text: string;
+  type: 'like' | 'dislike';
+}
+
 export interface Timeframe {
   id: string;
   title: string;
@@ -50,4 +56,5 @@ export interface AppState {
   insights: string;
   isSyncing: boolean;
   growthLabResponse: string;
+  preferences: UserPreference[];
 }

@@ -1,14 +1,12 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Icon } from '@iconify/react';
 import ReactMarkdown from 'react-markdown';
-import { Activity, MicroActivity, ScheduleItem, Category, Priority, Difficulty, Timeframe, RepeatType } from './types';
+import { Activity, MicroActivity, ScheduleItem, Category, Priority, Difficulty, Timeframe, RepeatType, UserPreference } from './types';
 import { geminiService } from './services/geminiService';
 
 const CATEGORIES: Category[] = ['Study', 'Task', 'Fitness', 'Personal'];
 const PRIORITIES: Priority[] = ['Urgent', 'Important', 'Normal'];
 const DIFFICULTIES: Difficulty[] = ['Hard', 'Medium', 'Easy'];
-const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-const REPEAT_OPTIONS: RepeatType[] = ['Today', 'Days', 'Weeks', 'Months', 'Years'];
 
 const toTitleCase = (str: string) => {
   if (!str) return '';
@@ -45,6 +43,7 @@ export default function App() {
     { id: '2', title: 'Hydration and Mobility', category: 'Fitness', priority: 'Normal', difficulty: 'Easy' }
   ]));
   const [timeframes, setTimeframes] = useState<Timeframe[]>(() => loadInitialState('insync_busy', []));
+  const [preferences, setPreferences] = useState<UserPreference[]>(() => loadInitialState('insync_prefs', []));
   const [microActivities, setMicroActivities] = useState<MicroActivity[]>(() => loadInitialState('insync_micro', []));
   const [doneItems, setDoneItems] = useState<DoneItem[]>(() => loadInitialState('insync_done', []));
   const [schedule, setSchedule] = useState<ScheduleItem[]>(() => loadInitialState('insync_schedule', []));
@@ -57,11 +56,13 @@ export default function App() {
   const [growthLabResponse, setGrowthLabResponse] = useState<GrowthResponse | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isTimeframeModalOpen, setIsTimeframeModalOpen] = useState(false);
-  const [isTimeframeManagerOpen, setIsTimeframeManagerOpen] = useState(false);
+  const [isCustomizeOpen, setIsCustomizeOpen] = useState(false);
+  const [customizeTab, setCustomizeTab] = useState<'busy' | 'like' | 'dislike'>('busy');
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
   const [isScheduleHistoryOpen, setIsScheduleHistoryOpen] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [microError, setMicroError] = useState<string | null>(null);
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const activeTaskRef = useRef<HTMLDivElement>(null);
@@ -76,21 +77,19 @@ export default function App() {
   const [tfTitle, setTfTitle] = useState('');
   const [tfStart, setTfStart] = useState('09:00');
   const [tfEnd, setTfEnd] = useState('10:00');
-  const [tfAnchorType, setTfAnchorType] = useState<'Date' | 'Weekday'>('Date');
-  const [tfAnchorValue, setTfAnchorValue] = useState(new Date().toISOString().split('T')[0]);
-  const [tfRepeatType, setTfRepeatType] = useState<RepeatType>('Today');
-  const [tfFrequency, setTfFrequency] = useState(1);
-  const [tfFrom, setTfFrom] = useState(new Date().toISOString().split('T')[0]);
-  const [tfTill, setTfTill] = useState('');
+
+  // Form States - Preferences
+  const [prefText, setPrefText] = useState('');
 
   useEffect(() => {
     localStorage.setItem('insync_activities', JSON.stringify(activities));
     localStorage.setItem('insync_busy', JSON.stringify(timeframes));
+    localStorage.setItem('insync_prefs', JSON.stringify(preferences));
     localStorage.setItem('insync_schedule', JSON.stringify(schedule));
     localStorage.setItem('insync_micro', JSON.stringify(microActivities));
     localStorage.setItem('insync_done', JSON.stringify(doneItems));
     localStorage.setItem('insync_insights', JSON.stringify(insights));
-  }, [activities, timeframes, schedule, microActivities, doneItems, insights]);
+  }, [activities, timeframes, preferences, schedule, microActivities, doneItems, insights]);
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
@@ -109,7 +108,7 @@ export default function App() {
     setErrorMessage(null);
     try {
       const [newSchedule, newInsights] = await Promise.all([
-        geminiService.generateSchedule(activities, timeframes),
+        geminiService.generateSchedule(activities, timeframes, preferences),
         geminiService.getDailyInsights(activities)
       ]);
       setSchedule(newSchedule);
@@ -119,22 +118,27 @@ export default function App() {
     } finally {
       setIsSyncing(false);
     }
-  }, [activities, timeframes, isSyncing]);
+  }, [activities, timeframes, preferences, isSyncing]);
 
   const refreshMicro = useCallback(async () => {
     if (isMicroLoading) return;
     setIsMicroLoading(true);
+    setMicroError(null);
     try {
       const micros = await geminiService.generateMicroActivities(activities);
       setMicroActivities(micros);
-    } catch (e) {} finally {
+    } catch (e: any) {
+      if (e.message === 'QUOTA_EXCEEDED') {
+        setMicroError("Daily Limit Reached.");
+      }
+    } finally {
       setIsMicroLoading(false);
     }
   }, [activities, isMicroLoading]);
 
   useEffect(() => {
     if (schedule.length === 0) syncEverything();
-    if (microActivities.length === 0) refreshMicro();
+    if (microActivities.length === 0 && !microError) refreshMicro();
   }, []);
 
   const parseTimeToMinutes = (timeStr: string) => {
@@ -167,7 +171,6 @@ export default function App() {
 
   const pastSchedule = useMemo(() => {
     if (schedule.length === 0 || currentTaskIndex === -1) return [];
-    // Sorted chronological items into reverse order (newest first)
     return [...schedule.slice(0, currentTaskIndex)].reverse();
   }, [schedule, currentTaskIndex]);
 
@@ -199,6 +202,17 @@ export default function App() {
     setIsModalOpen(false);
   };
 
+  const handleAddPreference = (type: 'like' | 'dislike') => {
+    if (!prefText.trim()) return;
+    const newPref: UserPreference = {
+      id: crypto.randomUUID(),
+      text: prefText.trim(),
+      type: type
+    };
+    setPreferences(prev => [...prev, newPref]);
+    setPrefText('');
+  };
+
   const handleAddTimeframe = () => {
     if (!tfTitle.trim()) return;
     const newTf: Timeframe = {
@@ -206,12 +220,10 @@ export default function App() {
       title: toTitleCase(tfTitle.trim()),
       startTime: tfStart,
       endTime: tfEnd,
-      anchorType: tfAnchorType,
-      anchorValue: tfAnchorValue,
-      repeatType: tfRepeatType,
-      repeatFrequency: tfFrequency,
-      repeatFrom: tfRepeatType !== 'Today' ? tfFrom : undefined,
-      repeatTill: tfTill || undefined,
+      anchorType: 'Weekday',
+      anchorValue: 'Daily',
+      repeatType: 'Today',
+      repeatFrequency: 1,
       isActive: true
     };
     setTimeframes(prev => [...prev, newTf]);
@@ -225,6 +237,10 @@ export default function App() {
 
   const deleteTimeframe = (id: string) => {
     setTimeframes(prev => prev.filter(tf => tf.id !== id));
+  };
+
+  const deletePreference = (id: string) => {
+    setPreferences(prev => prev.filter(p => p.id !== id));
   };
 
   const handleCompleteMicro = (micro: MicroActivity) => {
@@ -279,7 +295,7 @@ export default function App() {
   const renderScheduleIcon = (item: ScheduleItem, isActive: boolean, isBusy: boolean) => {
     const isEmoji = !item.icon?.includes('solar:');
     if (isEmoji && item.icon) {
-      return <span className="text-xl">{item.icon}</span>;
+      return <span className="text-2xl">{item.icon}</span>;
     }
     return <Icon icon={item.icon || (isBusy ? 'solar:forbidden-circle-outline' : 'solar:star-outline')} className="w-5 h-5" />;
   };
@@ -298,23 +314,21 @@ export default function App() {
             </div>
             <div>
               <h1 className="text-xl font-bold tracking-tight">inSync</h1>
-              <p className="text-[10px] font-bold text-slate-400 tracking-wide uppercase">AI Performance OS</p>
+              <p className="text-[10px] font-bold text-slate-400 tracking-wide uppercase">Time. Resynced</p>
             </div>
           </div>
           <div className="flex items-center gap-3 sm:gap-6">
             <button 
-              onClick={() => setIsTimeframeManagerOpen(true)}
-              aria-label="Manage Busy Hours"
-              className="flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 transition-all group active:scale-95 shadow-sm"
+              onClick={() => setIsCustomizeOpen(true)}
+              aria-label="Customize Schedule"
+              className="flex items-center gap-2 px-4 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 transition-all group active:scale-95 shadow-sm"
             >
-              <Icon icon="solar:calendar-minimalistic-outline" className="w-4 h-4 text-slate-600 group-hover:text-indigo-600" />
-              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wide hidden md:block">Busy Hours</span>
+              <Icon icon="solar:tuning-square-outline" className="w-4 h-4 text-slate-600 group-hover:text-indigo-600" />
+              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wide hidden md:block">Customize Flow</span>
             </button>
-            <div className="flex items-center gap-4">
-              <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full border border-slate-100 shadow-sm transition-all duration-500 ${currentStatus.bg}`}>
-                <div className={`w-1.5 h-1.5 rounded-full animate-pulse ${currentStatus.color.replace('text', 'bg')}`}></div>
-                <span className={`text-sm font-black tracking-tight ${currentStatus.color}`}>{currentStatus.label}</span>
-              </div>
+            <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full border border-slate-100 shadow-sm transition-all duration-500 ${currentStatus.bg}`}>
+              <div className={`w-1.5 h-1.5 rounded-full animate-pulse ${currentStatus.color.replace('text', 'bg')}`}></div>
+              <span className={`text-sm font-black tracking-tight ${currentStatus.color}`}>{currentStatus.label}</span>
             </div>
           </div>
         </div>
@@ -327,14 +341,14 @@ export default function App() {
             <div className="flex justify-between items-end mb-8">
               <div>
                 <h2 className="text-2xl font-black text-slate-900 tracking-tight">Mission Deck</h2>
-                <p className="text-sm text-slate-500 font-medium">Define your core focus objectives</p>
+                <p className="text-sm text-slate-500 font-medium">Core focus objectives</p>
               </div>
               <button 
                 onClick={() => setIsModalOpen(true)}
                 className="group flex items-center gap-2 bg-slate-900 hover:bg-indigo-600 text-white px-6 py-3 rounded-2xl font-bold transition-all shadow-xl active:scale-95"
               >
                 <Icon icon="solar:add-circle-outline" className="w-5 h-5 group-hover:rotate-90 transition-transform" />
-                Add Mission
+                New Mission
               </button>
             </div>
             {activities.length > 0 ? (
@@ -348,7 +362,6 @@ export default function App() {
                       </div>
                       <button 
                         onClick={() => setActivities(prev => prev.filter(a => a.id !== act.id))}
-                        aria-label="Delete Mission"
                         className="p-2 bg-slate-50 opacity-0 group-hover:opacity-100 rounded-xl text-slate-400 hover:text-rose-500 hover:bg-rose-50 transition-all"
                       >
                         <Icon icon="solar:trash-bin-trash-outline" className="w-4 h-4" />
@@ -388,47 +401,39 @@ export default function App() {
                 <p className="text-[10px] font-bold text-slate-400 mt-1 uppercase tracking-wide">Quick Focus Sprints</p>
               </div>
               <div className="flex items-center gap-3">
-                <button 
-                  onClick={() => setIsHistoryModalOpen(true)} 
-                  className="px-4 py-2 bg-slate-50 hover:bg-slate-100 text-slate-600 border border-slate-200 rounded-xl text-xs font-bold flex items-center gap-2 transition-all active:scale-95 h-[40px]"
-                >
-                  <Icon icon="solar:checklist-minimalistic-outline" className="w-3.5 h-3.5" />
+                <button onClick={() => setIsHistoryModalOpen(true)} className="px-4 py-2 bg-slate-50 hover:bg-slate-100 text-slate-600 border border-slate-200 rounded-xl text-xs font-bold flex items-center gap-2 transition-all active:scale-95 h-[40px]">
+                  <Icon icon="solar:history-outline" className="w-3.5 h-3.5" />
                   History
                 </button>
-                <button 
-                  onClick={refreshMicro} 
-                  disabled={isMicroLoading} 
-                  className={PRIMARY_SYNC_BUTTON_CLASSES}
-                >
+                <button onClick={refreshMicro} disabled={isMicroLoading} className={PRIMARY_SYNC_BUTTON_CLASSES}>
                   <Icon icon="solar:refresh-outline" className={`w-3.5 h-3.5 ${isMicroLoading ? 'animate-spin' : ''}`} />
                   Refresh
                 </button>
               </div>
             </div>
             <div className="p-8 grid grid-cols-2 sm:grid-cols-4 gap-4">
-              {microActivities.length > 0 ? microActivities.map(micro => (
+              {microError ? (
+                <div className="col-span-full py-12 text-center text-rose-500 bg-rose-50/50 rounded-[32px] border border-rose-100 animate-in zoom-in-95">
+                  <Icon icon="solar:danger-triangle-outline" className="w-8 h-8 mx-auto mb-2" />
+                  <p className="font-black text-sm uppercase tracking-widest">{microError}</p>
+                </div>
+              ) : microActivities.length > 0 ? microActivities.map(micro => (
                 <div 
                   key={micro.id} 
                   onClick={() => handleCompleteMicro(micro)}
                   className="relative p-5 bg-slate-50 border border-slate-100 rounded-2xl flex flex-col items-center text-center gap-2 transition-colors shadow-sm group/card cursor-pointer hover:border-emerald-200 hover:bg-emerald-100/60 overflow-hidden min-h-[140px] justify-center animate-in zoom-in-95"
                 >
                   <div className="relative h-10 w-10 flex items-center justify-center flex-shrink-0 transition-transform duration-200 group-hover/card:scale-110 mb-2">
-                    <div className="opacity-100 group-hover/card:opacity-0 transition-opacity duration-200 text-3xl">
-                      {micro.icon.includes('solar:') ? <Icon icon={micro.icon} className="w-8 h-8 text-slate-600" /> : micro.icon}
-                    </div>
+                    <div className="opacity-100 group-hover/card:opacity-0 transition-opacity duration-200 text-3xl">{micro.icon}</div>
                     <Icon icon="solar:check-circle-outline" className="absolute w-8 h-8 text-emerald-600 opacity-0 group-hover/card:opacity-100 transition-opacity duration-200" />
                   </div>
                   <div className="relative w-full">
-                    <span className="text-[10px] font-bold leading-tight text-slate-600 opacity-100 group-hover/card:opacity-0 transition-opacity duration-200 px-1 block break-words">
-                      {micro.text}
-                    </span>
-                    <span className="absolute inset-0 flex items-center justify-center text-[10px] font-black text-emerald-700 tracking-wide opacity-0 group-hover/card:opacity-100 transition-opacity duration-200">
-                      Done
-                    </span>
+                    <span className="text-[10px] font-bold leading-tight text-slate-600 opacity-100 group-hover/card:opacity-0 transition-opacity duration-200 px-1 block break-words">{micro.text}</span>
+                    <span className="absolute inset-0 flex items-center justify-center text-[10px] font-black text-emerald-700 tracking-wide opacity-0 group-hover/card:opacity-100 transition-opacity duration-200">Done</span>
                   </div>
                 </div>
               )) : (
-                <div className="col-span-full py-10 text-center text-slate-400 text-sm font-medium italic">Sync missions to generate daily focus hacks.</div>
+                <div className="col-span-full py-10 text-center text-slate-400 text-sm font-medium italic">Sync missions to generate focus hacks.</div>
               )}
             </div>
           </section>
@@ -441,12 +446,7 @@ export default function App() {
                   <Icon icon="solar:clock-circle-outline" className="w-5 h-5 text-indigo-500" />
                   Intelligent Schedule
                 </h2>
-                {errorMessage ? (
-                  <p className="text-[10px] font-bold text-rose-500 mt-1 flex items-center gap-1.5 animate-pulse">
-                    <Icon icon="solar:danger-triangle-outline" className="w-3 h-3" />
-                    {errorMessage}
-                  </p>
-                ) : currentTaskIndex !== -1 ? (
+                {currentTaskIndex !== -1 && !errorMessage ? (
                   <p className="text-[10px] font-bold text-indigo-500 mt-1 flex items-center gap-1.5">
                     <Icon icon="solar:play-circle-outline" className="w-3 h-3 animate-pulse" />
                     Focusing: {schedule[currentTaskIndex]?.title}
@@ -456,25 +456,23 @@ export default function App() {
                 )}
               </div>
               <div className="flex items-center gap-3">
-                <button 
-                  onClick={() => setIsScheduleHistoryOpen(true)} 
-                  className="px-4 py-2 bg-slate-50 hover:bg-slate-100 text-slate-600 border border-slate-200 rounded-xl text-xs font-bold flex items-center gap-2 transition-all active:scale-95 h-[40px]"
-                >
-                  <Icon icon="solar:checklist-minimalistic-outline" className="w-3.5 h-3.5" />
+                <button onClick={() => setIsScheduleHistoryOpen(true)} className="px-4 py-2 bg-slate-50 hover:bg-slate-100 text-slate-600 border border-slate-200 rounded-xl text-xs font-bold flex items-center gap-2 transition-all active:scale-95 h-[40px]">
+                  <Icon icon="solar:calendar-minimalistic-outline" className="w-3.5 h-3.5" />
                   History
                 </button>
-                <button 
-                  onClick={syncEverything} 
-                  disabled={isSyncing} 
-                  className={PRIMARY_SYNC_BUTTON_CLASSES}
-                >
+                <button onClick={syncEverything} disabled={isSyncing} className={PRIMARY_SYNC_BUTTON_CLASSES}>
                   <Icon icon="solar:refresh-outline" className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
                   Sync Flow
                 </button>
               </div>
             </div>
             <div ref={scrollContainerRef} className="p-8 space-y-6 max-h-[750px] overflow-y-auto custom-scrollbar scroll-smooth relative bg-slate-50/10">
-              {visibleSchedule.length > 0 ? (
+              {errorMessage ? (
+                <div className="py-20 text-center text-rose-500 bg-rose-50/50 rounded-[32px] border border-rose-100 animate-in zoom-in-95">
+                  <Icon icon="solar:danger-triangle-outline" className="w-10 h-10 mx-auto mb-4" />
+                  <p className="font-black text-sm uppercase tracking-widest">{errorMessage}</p>
+                </div>
+              ) : visibleSchedule.length > 0 ? (
                 <div className="relative space-y-8 before:absolute before:left-[70px] before:top-4 before:bottom-4 before:w-[2px] before:bg-slate-200">
                   {visibleSchedule.map((item, idx) => {
                     const isActive = idx === 0 && currentTaskIndex !== -1;
@@ -482,11 +480,9 @@ export default function App() {
                     return (
                       <div key={`${idx}-${item.time}`} ref={isActive ? activeTaskRef : null} className={`flex items-center gap-8 group transition-all duration-500 ${isActive ? 'scale-[1.02] z-10 relative' : 'opacity-60 grayscale-[0.3] hover:opacity-100 hover:grayscale-0'}`}>
                         <div className="w-16 text-right flex-shrink-0">
-                          <span className={`text-[11px] font-black font-mono tracking-tighter ${isActive ? 'text-indigo-600' : 'text-slate-400'}`}>
-                            {item.time}
-                          </span>
+                          <span className={`text-[11px] font-black font-mono tracking-tighter ${isActive ? 'text-indigo-600' : 'text-slate-400'}`}>{item.time}</span>
                         </div>
-                        <div className={`relative z-10 w-8 h-8 rounded-xl bg-white border transition-all flex items-center justify-center flex-shrink-0 shadow-sm ${isActive ? 'border-indigo-600 ring-4 ring-indigo-50 text-indigo-600' : isBusy ? 'border-amber-200 text-amber-500 bg-amber-50' : 'border-slate-200 text-slate-400'}`}>
+                        <div className={`relative z-10 w-10 h-10 rounded-2xl bg-white border transition-all flex items-center justify-center flex-shrink-0 shadow-sm ${isActive ? 'border-indigo-600 ring-4 ring-indigo-50 text-indigo-600' : isBusy ? 'border-amber-200 text-amber-500 bg-amber-50' : 'border-slate-200 text-slate-400'}`}>
                            {renderScheduleIcon(item, isActive, isBusy)}
                         </div>
                         <div className={`flex-1 p-6 rounded-[32px] border transition-all bg-white border-slate-200 ${isActive ? 'ring-2 ring-indigo-600 shadow-2xl shadow-indigo-100/50 -translate-x-1' : isBusy ? 'bg-amber-50/20 border-amber-100' : 'hover:border-slate-300'}`}>
@@ -541,38 +537,23 @@ export default function App() {
                   )}
                 </div>
                 <div className="relative">
-                  <input 
-                    type="text" 
-                    value={growthQuery}
-                    onChange={(e) => setGrowthQuery(e.target.value)}
-                    onKeyPress={(e) => e.key === 'Enter' && handleGrowthQuery()}
-                    placeholder="Ask focus science..."
-                    className="w-full bg-slate-800 border border-slate-700 rounded-2xl py-4 pl-5 pr-14 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all font-medium text-white placeholder:text-slate-500"
-                  />
-                  <button onClick={handleGrowthQuery} disabled={isGrowthLoading} aria-label="Ask Growth Lab" className="absolute right-2 top-2 bottom-2 bg-indigo-600 text-white px-3 rounded-xl hover:bg-indigo-500 disabled:bg-slate-700 transition-all flex items-center justify-center">
+                  <input type="text" value={growthQuery} onChange={e => setGrowthQuery(e.target.value)} onKeyPress={e => e.key === 'Enter' && handleGrowthQuery()} placeholder="Ask focus science..." className="w-full bg-slate-800 border border-slate-700 rounded-2xl py-4 pl-5 pr-14 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all font-medium text-white placeholder:text-slate-500" />
+                  <button onClick={handleGrowthQuery} disabled={isGrowthLoading} className="absolute right-2 top-2 bottom-2 bg-indigo-600 text-white px-3 rounded-xl hover:bg-indigo-500 disabled:bg-slate-700 transition-all flex items-center justify-center">
                     <Icon icon={isGrowthLoading ? "solar:refresh-outline" : "solar:plain-2-outline"} className={`w-5 h-5 ${isGrowthLoading ? 'animate-spin' : ''}`} />
                   </button>
                 </div>
                 {growthLabResponse && (
                   <div className="bg-slate-800/50 border border-slate-700 rounded-2xl p-6 text-sm max-h-[400px] overflow-y-auto custom-scrollbar prose-custom animate-in fade-in slide-in-from-top-2">
                     <div className="flex items-center gap-2 mb-3 text-[10px] font-black text-indigo-400 uppercase tracking-widest">
-                      <Icon icon="solar:globus-outline" className="w-3 h-3" />
-                      Grounded Insight
+                      <Icon icon="solar:globus-outline" className="w-3 h-3" /> Grounded Insight
                     </div>
                     <ReactMarkdown>{growthLabResponse.text}</ReactMarkdown>
-                    
                     {growthLabResponse.sources && growthLabResponse.sources.length > 0 && (
                       <div className="mt-6 pt-4 border-t border-slate-700">
                         <p className="text-[10px] font-bold text-slate-400 uppercase mb-3">Sources</p>
                         <div className="flex flex-col gap-2">
                           {growthLabResponse.sources.map((s, idx) => (
-                            <a 
-                              key={idx} 
-                              href={s.uri} 
-                              target="_blank" 
-                              rel="noopener noreferrer" 
-                              className="text-[11px] text-indigo-400 hover:text-indigo-300 font-medium underline flex items-center gap-1.5 transition-colors"
-                            >
+                            <a key={idx} href={s.uri} target="_blank" rel="noopener noreferrer" className="text-[11px] text-indigo-400 hover:text-indigo-300 font-medium underline flex items-center gap-1.5 transition-colors">
                               <Icon icon="solar:link-outline" className="w-3 h-3 flex-shrink-0" />
                               <span className="truncate">{s.title}</span>
                             </a>
@@ -607,8 +588,8 @@ export default function App() {
       {/* Activity Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-slate-900/60 backdrop-blur-md animate-in fade-in">
-          <div className="bg-white w-full max-w-md rounded-[48px] p-10 shadow-2xl animate-in zoom-in-95" role="dialog" aria-labelledby="modal-mission-title">
-            <h3 id="modal-mission-title" className="text-3xl font-black text-slate-900 mb-8 tracking-tighter">New Mission</h3>
+          <div className="bg-white w-full max-w-md rounded-[48px] p-10 shadow-2xl animate-in zoom-in-95" role="dialog">
+            <h3 className="text-3xl font-black text-slate-900 mb-8 tracking-tighter">New Mission</h3>
             <div className="space-y-6">
               <div>
                 <label className="text-[10px] font-bold text-slate-400 uppercase mb-2 block">Objective Title</label>
@@ -631,205 +612,172 @@ export default function App() {
               </div>
             </div>
             <div className="flex gap-4 mt-12">
-              <button onClick={() => setIsModalOpen(false)} className="flex-1 font-bold text-slate-400">Cancel</button>
-              <button onClick={handleAddActivity} className="flex-[1.5] py-4 bg-slate-900 text-white rounded-2xl font-bold hover:bg-indigo-600 shadow-xl shadow-slate-200 transition-all active:scale-95">Add Mission</button>
+              <button onClick={() => setIsModalOpen(false)} className="flex-1 font-bold text-slate-400 hover:text-slate-600 transition-colors">Cancel</button>
+              <button onClick={handleAddActivity} className="flex-[1.5] py-4 bg-slate-900 text-white rounded-2xl font-bold hover:bg-indigo-600 transition-all active:scale-95 shadow-xl shadow-indigo-100">Add Mission</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Busy Hours Manager Modal */}
-      {isTimeframeManagerOpen && (
+      {/* Customize Modal */}
+      {isCustomizeOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-slate-900/60 backdrop-blur-md animate-in fade-in">
-          <div className="bg-white w-full max-w-2xl rounded-[48px] p-10 shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[85vh]" role="dialog" aria-labelledby="modal-busy-title">
+          <div className="bg-white w-full max-w-2xl rounded-[48px] p-10 shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[85vh]">
             <div className="flex justify-between items-center mb-8">
               <div>
-                <h3 id="modal-busy-title" className="text-3xl font-black text-slate-900 tracking-tighter">Busy Hours</h3>
-                <p className="text-sm text-slate-500 font-medium">Manage restricted scheduling windows</p>
+                <h3 className="text-3xl font-black text-slate-900 tracking-tighter">Customize AI</h3>
+                <p className="text-sm text-slate-500 font-medium">Fine-tune your schedule logic</p>
               </div>
-              <button 
-                onClick={() => setIsTimeframeModalOpen(true)}
-                className="flex items-center gap-2 bg-slate-900 hover:bg-indigo-600 text-white px-5 py-2.5 rounded-2xl font-bold transition-all shadow-lg active:scale-95"
-              >
-                <Icon icon="solar:add-circle-outline" className="w-5 h-5" />
-                Add Timeframe
-              </button>
+              <button onClick={() => setIsCustomizeOpen(false)} className="p-2 hover:bg-slate-50 rounded-full text-slate-400 transition-colors"><Icon icon="solar:close-circle-outline" className="w-6 h-6" /></button>
             </div>
-            <div className="flex-1 overflow-y-auto custom-scrollbar space-y-4 pr-2">
-              {timeframes.length > 0 ? timeframes.map(tf => (
-                <div key={tf.id} className={`p-5 rounded-[28px] border transition-all flex items-center justify-between gap-6 group ${tf.isActive ? 'bg-white border-slate-200' : 'bg-slate-50 border-slate-100 opacity-60'}`}>
-                  <div className="flex items-center gap-4 flex-1">
-                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0 ${tf.isActive ? 'bg-amber-50 text-amber-600' : 'bg-slate-100 text-slate-400'}`}>
-                      <Icon icon="solar:forbidden-circle-outline" className="w-6 h-6" />
+
+            <div className="flex gap-2 p-1.5 bg-slate-100 rounded-2xl mb-8">
+              {(['busy', 'like', 'dislike'] as const).map(tab => (
+                <button key={tab} onClick={() => setCustomizeTab(tab)} className={`flex-1 py-2.5 text-[11px] font-bold rounded-xl transition-all ${customizeTab === tab ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                  {tab === 'busy' ? 'Busy Hours' : tab === 'like' ? 'Include' : 'Exclude'}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex-1 overflow-y-auto custom-scrollbar px-2 space-y-6">
+              {customizeTab === 'busy' && (
+                <div className="space-y-4">
+                  <div className="flex justify-between items-center">
+                    <h4 className="font-bold text-slate-800 text-sm">Active Timeframes</h4>
+                    <button onClick={() => setIsTimeframeModalOpen(true)} className="text-xs font-bold text-indigo-600 hover:underline flex items-center gap-1">
+                      <Icon icon="solar:add-circle-outline" className="w-3.5 h-3.5" /> New Window
+                    </button>
+                  </div>
+                  {timeframes.length > 0 ? timeframes.map(tf => (
+                    <div key={tf.id} className={`p-5 rounded-[28px] border flex items-center justify-between gap-4 transition-all ${tf.isActive ? 'bg-white border-slate-200 shadow-sm' : 'bg-slate-50 border-slate-100 opacity-60'}`}>
+                      <div className="flex items-center gap-4">
+                        <div className={`w-11 h-11 rounded-2xl flex items-center justify-center ${tf.isActive ? 'bg-amber-50 text-amber-600' : 'bg-slate-200 text-slate-400'}`}><Icon icon="solar:calendar-outline" className="w-5.5 h-5.5" /></div>
+                        <div>
+                          <p className="font-bold text-slate-800 text-sm leading-tight">{tf.title}</p>
+                          <p className="text-[10px] font-bold text-slate-400 mt-0.5">{tf.startTime} - {tf.endTime}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <button onClick={() => toggleTimeframe(tf.id)} className={`w-10 h-5 rounded-full relative transition-all ${tf.isActive ? 'bg-indigo-600' : 'bg-slate-300'}`}>
+                          <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${tf.isActive ? 'right-1' : 'left-1'}`} />
+                        </button>
+                        <button onClick={() => deleteTimeframe(tf.id)} className="p-2 text-slate-400 hover:text-rose-500 transition-colors"><Icon icon="solar:trash-bin-trash-outline" /></button>
+                      </div>
                     </div>
-                    <div>
-                      <h4 className="font-bold text-slate-800">{tf.title}</h4>
-                      <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
-                        <Icon icon="solar:clock-circle-outline" className="w-3 h-3" />
-                        {tf.startTime} - {tf.endTime} • {tf.anchorValue} • Every {tf.repeatFrequency} {tf.repeatType}
-                      </p>
+                  )) : (
+                    <div className="text-center py-12 border-2 border-dashed border-slate-100 rounded-[32px] text-slate-400 text-xs font-medium italic">No fixed busy hours yet. Add them to block AI scheduling.</div>
+                  )}
+                </div>
+              )}
+
+              {customizeTab !== 'busy' && (
+                <div className="space-y-6">
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Add {customizeTab === 'like' ? 'Interest' : 'Exclusion'}</label>
+                    <div className="flex gap-2">
+                      <input value={prefText} onChange={e => setPrefText(e.target.value)} placeholder={customizeTab === 'like' ? "e.g. Deep Work, Afternoon Tea..." : "e.g. Early mornings, Screens at night..."} className="flex-1 bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none placeholder:text-slate-300 transition-all" onKeyPress={e => e.key === 'Enter' && handleAddPreference(customizeTab as 'like' | 'dislike')} />
+                      <button onClick={() => handleAddPreference(customizeTab as 'like' | 'dislike')} className={`px-5 rounded-2xl text-white transition-all shadow-lg active:scale-95 ${customizeTab === 'like' ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-100' : 'bg-rose-600 hover:bg-rose-700 shadow-rose-100'}`}>
+                        <Icon icon="solar:add-circle-outline" className="w-6 h-6" />
+                      </button>
                     </div>
                   </div>
-                  <div className="flex items-center gap-3">
-                    <button 
-                      onClick={() => toggleTimeframe(tf.id)}
-                      aria-label={tf.isActive ? "Deactivate" : "Activate"}
-                      className={`w-12 h-6 rounded-full relative transition-all ${tf.isActive ? 'bg-indigo-600' : 'bg-slate-300'}`}
-                    >
-                      <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${tf.isActive ? 'right-1' : 'left-1'}`} />
-                    </button>
-                    <button 
-                      onClick={() => deleteTimeframe(tf.id)}
-                      aria-label="Delete Timeframe"
-                      className="p-2 bg-slate-50 opacity-0 group-hover:opacity-100 rounded-xl text-slate-400 hover:text-rose-500 hover:bg-rose-50 transition-all"
-                    >
-                      <Icon icon="solar:trash-bin-trash-outline" className="w-4 h-4" />
-                    </button>
+                  <div className="flex flex-wrap gap-2 pt-2">
+                    {preferences.filter(p => p.type === customizeTab).map(pref => (
+                      <div key={pref.id} className={`flex items-center gap-2 px-4 py-2 rounded-full border text-[11px] font-black tracking-tight transition-all animate-in zoom-in-95 ${pref.type === 'like' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-rose-50 text-rose-700 border-rose-200'}`}>
+                        {pref.text}
+                        <button onClick={() => deletePreference(pref.id)} className="hover:text-slate-900 transition-colors"><Icon icon="solar:close-circle-outline" className="w-3.5 h-3.5" /></button>
+                      </div>
+                    ))}
+                    {preferences.filter(p => p.type === customizeTab).length === 0 && (
+                      <div className="w-full text-center py-12 text-slate-300 text-xs italic font-medium italic">Guidance helps AI build a schedule that fits your life.</div>
+                    )}
                   </div>
                 </div>
-              )) : (
-                <div className="text-center py-20 bg-slate-50 border border-slate-100 rounded-[32px] text-slate-400 text-sm font-medium italic">No busy hours defined yet.</div>
               )}
             </div>
-            <button onClick={() => setIsTimeframeManagerOpen(false)} className={STANDARD_CLOSE_BUTTON_CLASSES}>Close Manager</button>
+            <button onClick={() => { syncEverything(); setIsCustomizeOpen(false); }} className="mt-8 py-5 bg-indigo-600 text-white rounded-[32px] font-black text-sm tracking-widest uppercase hover:bg-indigo-700 shadow-2xl shadow-indigo-100 transition-all active:scale-95 disabled:opacity-50" disabled={isSyncing}>
+              {isSyncing ? 'Synchronizing intelligence...' : 'Update & Regenerate Schedule'}
+            </button>
           </div>
         </div>
       )}
 
-      {/* Add Timeframe Modal */}
+      {/* Timeframe Entry Modal */}
       {isTimeframeModalOpen && (
         <div className="fixed inset-0 z-[110] flex items-center justify-center p-6 bg-slate-900/60 backdrop-blur-md animate-in fade-in">
-          <div className="bg-white w-full max-w-lg rounded-[48px] p-10 shadow-2xl animate-in zoom-in-95 max-h-[90vh] overflow-y-auto custom-scrollbar" role="dialog" aria-labelledby="modal-add-tf-title">
-            <h3 id="modal-add-tf-title" className="text-3xl font-black text-slate-900 mb-8 tracking-tighter">Block Timeframe</h3>
+          <div className="bg-white w-full max-w-lg rounded-[48px] p-10 shadow-2xl animate-in zoom-in-95">
+            <h3 className="text-3xl font-black text-slate-900 mb-8 tracking-tighter">Block Daily Window</h3>
             <div className="space-y-6">
               <div>
                 <label className="text-[10px] font-bold text-slate-400 uppercase mb-2 block">Window Label</label>
-                <input value={tfTitle} onChange={e => setTfTitle(e.target.value)} placeholder="e.g. University Lectures" className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 font-bold focus:ring-2 focus:ring-indigo-500 outline-none" />
+                <input value={tfTitle} onChange={e => setTfTitle(e.target.value)} placeholder="e.g. Physics Class" className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 font-bold outline-none" />
               </div>
-
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="text-[10px] font-bold text-slate-400 uppercase mb-2 block">Start</label>
+                  <label className="text-[10px] font-bold text-slate-400 uppercase mb-2 block">Starts</label>
                   <input type="time" value={tfStart} onChange={e => setTfStart(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 font-bold outline-none" />
                 </div>
                 <div>
-                  <label className="text-[10px] font-bold text-slate-400 uppercase mb-2 block">End</label>
+                  <label className="text-[10px] font-bold text-slate-400 uppercase mb-2 block">Ends</label>
                   <input type="time" value={tfEnd} onChange={e => setTfEnd(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 font-bold outline-none" />
                 </div>
               </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <button onClick={() => setTfAnchorType('Date')} className={`py-3 text-[10px] font-bold rounded-2xl border transition-all ${tfAnchorType === 'Date' ? 'bg-slate-900 text-white shadow-lg' : 'bg-white text-slate-500 border-slate-200'}`}>Specific Date</button>
-                <button onClick={() => setTfAnchorType('Weekday')} className={`py-3 text-[10px] font-bold rounded-2xl border transition-all ${tfAnchorType === 'Weekday' ? 'bg-slate-900 text-white shadow-lg' : 'bg-white text-slate-500 border-slate-200'}`}>Weekday</button>
-              </div>
-
-              {tfAnchorType === 'Date' ? (
-                <input type="date" value={tfAnchorValue} onChange={e => setTfAnchorValue(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 font-bold outline-none" />
-              ) : (
-                <div className="flex flex-wrap gap-2">
-                  {WEEKDAYS.map(d => (
-                    <button key={d} onClick={() => setTfAnchorValue(d)} className={`px-4 py-2 text-[10px] font-bold rounded-xl border transition-all ${tfAnchorValue === d ? 'bg-indigo-600 text-white shadow-md' : 'bg-white text-slate-500 border-slate-200'}`}>{d}</button>
-                  ))}
-                </div>
-              )}
-
-              <div className="border-t border-slate-100 pt-6">
-                <label className="text-[10px] font-bold text-slate-400 uppercase mb-4 block">Repetition</label>
-                <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 mb-4">
-                  {REPEAT_OPTIONS.map(opt => (
-                    <button key={opt} onClick={() => setTfRepeatType(opt)} className={`py-2 text-[10px] font-bold rounded-xl border transition-all ${tfRepeatType === opt ? 'bg-indigo-600 text-white shadow-md' : 'bg-white text-slate-400 border-slate-200'}`}>{opt}</button>
-                  ))}
-                </div>
-
-                {tfRepeatType !== 'Today' && (
-                  <div className="space-y-4 animate-in slide-in-from-top-4">
-                    <div className="flex items-center gap-4 bg-slate-50 p-4 rounded-2xl border border-slate-100">
-                      <span className="text-[10px] font-bold text-slate-400 uppercase whitespace-nowrap">Every</span>
-                      <input 
-                        type="number" 
-                        value={tfFrequency} 
-                        onChange={e => setTfFrequency(Math.max(1, parseInt(e.target.value) || 1))} 
-                        className="bg-transparent font-bold text-indigo-600 outline-none w-12 text-center border-b border-indigo-200" 
-                      />
-                      <span className="text-[10px] font-bold text-slate-400 uppercase">{tfRepeatType.toLowerCase()}</span>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label className="text-[10px] font-bold text-slate-400 uppercase mb-2 block">Repeat From</label>
-                        <input type="date" value={tfFrom} onChange={e => setTfFrom(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 font-bold outline-none" />
-                      </div>
-                      <div>
-                        <label className="text-[10px] font-bold text-slate-400 uppercase mb-2 block">Repeat Till</label>
-                        <input type="date" value={tfTill} onChange={e => setTfTill(e.target.value)} placeholder="Ongoing" className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 font-bold outline-none" />
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
             </div>
             <div className="flex gap-4 mt-12">
-              <button onClick={() => setIsTimeframeModalOpen(false)} className="flex-1 font-bold text-slate-400">Cancel</button>
-              <button onClick={handleAddTimeframe} className="flex-[1.5] py-4 bg-slate-900 text-white rounded-2xl font-bold hover:bg-indigo-600 shadow-xl shadow-slate-200 transition-all active:scale-95">Save Timeframe</button>
+              <button onClick={() => setIsTimeframeModalOpen(false)} className="flex-1 font-bold text-slate-400 hover:text-slate-600 transition-colors">Cancel</button>
+              <button onClick={handleAddTimeframe} className="flex-[1.5] py-4 bg-slate-900 text-white rounded-2xl font-bold shadow-xl active:scale-95 transition-all">Save Window</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Micro Activity History Modal */}
+      {/* History Modals */}
       {isHistoryModalOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-slate-900/60 backdrop-blur-md animate-in fade-in">
-          <div className="bg-white w-full max-w-lg rounded-[48px] p-10 shadow-2xl flex flex-col max-h-[80vh]" role="dialog" aria-labelledby="modal-history-title">
+          <div className="bg-white w-full max-w-lg rounded-[48px] p-10 shadow-2xl flex flex-col max-h-[80vh]">
             <div className="flex justify-between items-center mb-8">
-              <div>
-                <h3 id="modal-history-title" className="text-3xl font-black text-slate-900 tracking-tighter">Done Today</h3>
-                <p className="text-sm text-slate-500 font-medium">Log of completed micro-wins</p>
-              </div>
-              <button onClick={() => setDoneItems([])} aria-label="Clear History" className="text-[10px] font-bold text-rose-500 flex items-center gap-1 hover:bg-rose-50 px-2 py-1 rounded-lg transition-colors"><Icon icon="solar:trash-bin-trash-outline" /> Clear All</button>
+              <h3 className="text-3xl font-black text-slate-900 tracking-tighter">Micro Wins</h3>
+              <button onClick={() => setDoneItems([])} className="text-[10px] font-black uppercase text-rose-500 hover:bg-rose-50 px-3 py-1 rounded-full transition-all">Reset Log</button>
             </div>
             <div className="flex-1 overflow-y-auto custom-scrollbar space-y-4">
-              {doneItems.length > 0 ? doneItems.map((item) => (
-                <div key={item.id} className="flex items-center gap-5 p-4 bg-slate-50 border border-slate-100 rounded-2xl animate-in fade-in slide-in-from-left-2">
-                  <span className="text-2xl">{item.icon}</span>
-                  <div className="flex-1">
-                    <p className="font-bold text-slate-800 text-sm">{item.text}</p>
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">{item.timestamp}</p>
+              {doneItems.length > 0 ? doneItems.map(item => (
+                <div key={item.id} className="flex items-center gap-5 p-5 bg-slate-50 border border-slate-100 rounded-[28px] animate-in slide-in-from-left-4 transition-all hover:border-indigo-100">
+                  <div className="w-12 h-12 rounded-2xl bg-white border border-slate-100 flex items-center justify-center flex-shrink-0 shadow-sm text-2xl">
+                    {item.icon}
                   </div>
-                  <Icon icon="solar:check-circle-outline" className="w-6 h-6 text-emerald-500" />
+                  <div className="flex-1">
+                    <p className="font-bold text-slate-800 text-sm leading-tight">{item.text}</p>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">{item.timestamp}</p>
+                  </div>
+                  <Icon icon="solar:check-circle-bold" className="w-6 h-6 text-emerald-500" />
                 </div>
               )) : (
-                <div className="text-center py-20 bg-slate-50 border border-slate-100 rounded-[32px] text-slate-400 text-sm font-medium italic">No micro-activities logged today.</div>
+                <div className="text-center py-24 text-slate-300 text-sm italic font-medium italic">Complete focus hacks to log your progress here.</div>
               )}
             </div>
-            <button onClick={() => setIsHistoryModalOpen(false)} className={STANDARD_CLOSE_BUTTON_CLASSES}>Close History</button>
+            <button onClick={() => setIsHistoryModalOpen(false)} className={STANDARD_CLOSE_BUTTON_CLASSES}>Close Ledger</button>
           </div>
         </div>
       )}
 
-      {/* Schedule History Modal */}
       {isScheduleHistoryOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-slate-900/60 backdrop-blur-md animate-in fade-in">
-          <div className="bg-white w-full max-w-lg rounded-[48px] p-10 shadow-2xl flex flex-col max-h-[80vh]" role="dialog" aria-labelledby="modal-schedule-history-title">
-            <div className="flex justify-between items-center mb-8">
-              <div>
-                <h3 id="modal-schedule-history-title" className="text-3xl font-black text-slate-900 tracking-tighter">Schedule History</h3>
-                <p className="text-sm text-slate-500 font-medium">Past items from today's cognitive path</p>
-              </div>
-            </div>
+          <div className="bg-white w-full max-w-lg rounded-[48px] p-10 shadow-2xl flex flex-col max-h-[80vh]">
+            <h3 className="text-3xl font-black text-slate-900 mb-8 tracking-tighter">Daily History</h3>
             <div className="flex-1 overflow-y-auto custom-scrollbar space-y-4">
               {pastSchedule.length > 0 ? pastSchedule.map((item, idx) => (
-                <div key={`${idx}-${item.time}`} className="flex items-center gap-5 p-4 bg-slate-50 border border-slate-100 rounded-2xl animate-in fade-in slide-in-from-left-2" style={{ animationDelay: `${idx * 50}ms` }}>
-                  <div className="w-12 h-12 rounded-xl bg-white border border-slate-200 flex items-center justify-center flex-shrink-0 text-slate-400">
+                <div key={`${idx}-${item.time}`} className="flex items-center gap-5 p-5 bg-slate-50 border border-slate-100 rounded-[28px] animate-in slide-in-from-left-4 transition-all hover:border-indigo-100">
+                  <div className="w-11 h-11 rounded-2xl bg-white border border-slate-100 flex items-center justify-center flex-shrink-0 shadow-sm">
                     {renderScheduleIcon(item, false, item.type.toLowerCase() === 'busy')}
                   </div>
                   <div className="flex-1">
-                    <p className="font-bold text-slate-800 text-sm">{item.title}</p>
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">{item.time} • {item.type}</p>
+                    <p className="font-bold text-slate-800 text-sm leading-tight">{item.title}</p>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">{item.time} • {item.type}</p>
                   </div>
-                  <Icon icon="solar:check-circle-outline" className="w-6 h-6 text-emerald-500" />
+                  <Icon icon="solar:check-circle-bold" className="w-6 h-6 text-emerald-500" />
                 </div>
               )) : (
-                <div className="text-center py-20 bg-slate-50 border border-slate-100 rounded-[32px] text-slate-400 text-sm font-medium italic">Your daily journey is just beginning.</div>
+                <div className="text-center py-24 text-slate-300 text-sm italic font-medium italic">The day has just begun. Past activities will appear here.</div>
               )}
             </div>
             <button onClick={() => setIsScheduleHistoryOpen(false)} className={STANDARD_CLOSE_BUTTON_CLASSES}>Close History</button>
