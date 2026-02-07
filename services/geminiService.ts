@@ -16,7 +16,7 @@ const retryWrapper = async <T,>(fn: () => Promise<T>, retries = 2): Promise<T> =
   }
 };
 
-// Updated model names as per user request
+// Explicitly setting requested model names
 const LITE_MODEL = 'gemini-2.0-flash-lite';
 const MAIN_MODEL = 'gemini-2.5-flash';
 
@@ -48,6 +48,7 @@ export const geminiService = {
         
         Return a chronological JSON array. Time format: 'HH:MM AM/PM'.`,
         config: {
+          thinkingConfig: { thinkingBudget: 0 },
           responseMimeType: "application/json",
           responseSchema: {
             type: Type.ARRAY,
@@ -79,22 +80,28 @@ export const geminiService = {
         IMPORTANT: The "text" field MUST contain ONLY the activity name (e.g., "Deep Breath"). DO NOT include emojis or icons in the text field. 
         Put a single emoji in the "icon" field. Ensure activity text is Title Case.`,
         config: {
+          thinkingConfig: { thinkingBudget: 0 },
           responseMimeType: "application/json",
           responseSchema: {
             type: Type.ARRAY,
             items: {
               type: Type.OBJECT,
               properties: {
-                id: { type: Type.STRING },
                 text: { type: Type.STRING },
                 icon: { type: Type.STRING }
               },
-              required: ["id", "text", "icon"]
+              required: ["text", "icon"]
             }
           }
         }
       });
-      return JSON.parse(response.text || '[]');
+      
+      const rawData = JSON.parse(response.text || '[]');
+      // Map to ensure each item has a unique, stable ID generated on the client to prevent collisions
+      return rawData.map((item: any) => ({
+        ...item,
+        id: Math.random().toString(36).substring(2, 11) + Date.now().toString(36)
+      }));
     });
   },
 
@@ -105,6 +112,7 @@ export const geminiService = {
         model: LITE_MODEL,
         contents: `Provide a strategic focus insight (15 words max) for these missions: ${JSON.stringify(activities)}. Use Markdown for **emphasis**. Ensure all text is Title Case.`,
         config: {
+          thinkingConfig: { thinkingBudget: 0 },
           systemInstruction: "You are an elite high-performance coach. Be punchy, wise, and use markdown. Use Title Case for all sentences."
         }
       });
@@ -119,6 +127,7 @@ export const geminiService = {
         model: MAIN_MODEL,
         contents: `Query: "${query}". Context: ${JSON.stringify(activities)}. Explain using cognitive science. Use Google Search to find up-to-date scientific papers or performance tips if needed.`,
         config: {
+          thinkingConfig: { thinkingBudget: 0 },
           tools: [{ googleSearch: {} }],
           systemInstruction: "You are the inSync Growth Lab. Provide scientific advice using clean Markdown formatting. Cite web sources if you use Google Search."
         }
@@ -126,9 +135,11 @@ export const geminiService = {
 
       const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
       const sources = groundingChunks?.map((chunk: any) => ({
-        title: chunk.web?.title || 'Source',
-        uri: chunk.web?.uri || '#'
-      })).filter((s: any) => s.uri !== '#');
+        web: chunk.web
+      })).filter((s: any) => s.web).map((s: any) => ({
+        title: s.web.title,
+        uri: s.web.uri
+      }));
 
       return {
         text: response.text || "Analyzing Your Cognitive Request...",

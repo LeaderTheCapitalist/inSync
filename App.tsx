@@ -58,6 +58,7 @@ export default function App() {
   const [isTimeframeModalOpen, setIsTimeframeModalOpen] = useState(false);
   const [isTimeframeManagerOpen, setIsTimeframeManagerOpen] = useState(false);
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
+  const [isScheduleHistoryOpen, setIsScheduleHistoryOpen] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -157,6 +158,20 @@ export default function App() {
     return activeIdx;
   }, [schedule, currentTime]);
 
+  // Derived schedules
+  const visibleSchedule = useMemo(() => {
+    if (schedule.length === 0) return [];
+    if (currentTaskIndex === -1) return schedule;
+    // Show current task and everything after it
+    return schedule.slice(currentTaskIndex);
+  }, [schedule, currentTaskIndex]);
+
+  const pastSchedule = useMemo(() => {
+    if (schedule.length === 0 || currentTaskIndex === -1) return [];
+    // Everything before the current task, reversed to show newest (most recent past) first
+    return [...schedule.slice(0, currentTaskIndex)].reverse();
+  }, [schedule, currentTaskIndex]);
+
   const currentStatus = useMemo(() => {
     if (activities.length === 0) return { label: 'Idle', color: 'text-slate-400', bg: 'bg-slate-50' };
     const difficultyWeight = { 'Easy': 1, 'Medium': 2, 'Hard': 3 };
@@ -164,7 +179,7 @@ export default function App() {
     const totalHeat = activities.reduce((acc, curr) => {
       return acc + (difficultyWeight[curr.difficulty] || 0) + (priorityWeight[curr.priority] || 0);
     }, 0);
-    if (totalHeat < 5) return { label: 'Chill', color: 'text-sky-500', bg: 'bg-slate-100' };
+    if (totalHeat < 5) return { label: 'Chill', color: 'text-sky-500', bg: 'bg-sky-50' };
     if (totalHeat < 9) return { label: 'Casual', color: 'text-emerald-500', bg: 'bg-emerald-50' };
     if (totalHeat < 14) return { label: 'Normal', color: 'text-indigo-500', bg: 'bg-indigo-50' };
     if (totalHeat < 20) return { label: 'Busy', color: 'text-amber-500', bg: 'bg-amber-50' };
@@ -214,14 +229,21 @@ export default function App() {
   };
 
   const handleCompleteMicro = (micro: MicroActivity) => {
-    const newItem: DoneItem = {
-      id: micro.id,
-      text: micro.text,
-      icon: micro.icon,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    };
-    setDoneItems(prev => [newItem, ...prev]);
-    setMicroActivities(prev => prev.filter(m => m.id !== micro.id));
+    // Robust multi-step removal to handle potential ID collisions (though service now fixes them)
+    // and prevent race conditions or duplicate processing.
+    setMicroActivities(prev => {
+      const exists = prev.find(m => m.id === micro.id);
+      if (!exists) return prev;
+
+      const newItem: DoneItem = {
+        id: micro.id,
+        text: micro.text,
+        icon: micro.icon,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      };
+      setDoneItems(d => [newItem, ...d]);
+      return prev.filter(m => m.id !== micro.id);
+    });
   };
 
   const handleGrowthQuery = useCallback(async () => {
@@ -260,10 +282,8 @@ export default function App() {
   };
 
   const STANDARD_CLOSE_BUTTON_CLASSES = "mt-8 py-4 bg-slate-50 hover:bg-slate-100 text-slate-600 rounded-2xl font-bold transition-all shadow-sm active:scale-95";
-  
-  // Refined shared styles for headers and buttons to ensure consistency
   const SECTION_HEADER_CLASSES = "px-8 py-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/30";
-  const PRIMARY_SYNC_BUTTON_CLASSES = "px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold flex items-center gap-2 transition-all shadow-lg shadow-indigo-100 active:scale-95 disabled:bg-slate-300 disabled:shadow-none min-w-[130px] h-[40px] justify-center";
+  const PRIMARY_SYNC_BUTTON_CLASSES = "px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold flex items-center gap-2 transition-all shadow-lg shadow-indigo-100 active:scale-95 disabled:bg-slate-300 disabled:shadow-none h-[40px] whitespace-nowrap";
 
   return (
     <div className="min-h-screen bg-[#f8fafc] text-slate-900 pb-20 selection:bg-indigo-100 selection:text-indigo-900">
@@ -367,7 +387,7 @@ export default function App() {
               <div className="flex items-center gap-3">
                 <button 
                   onClick={() => setIsHistoryModalOpen(true)} 
-                  className="px-4 py-2 bg-slate-50 hover:bg-slate-100 text-slate-600 border border-slate-200 rounded-xl text-xs font-bold items-center gap-2 transition-all active:scale-95 flex h-[40px]"
+                  className="px-4 py-2 bg-slate-50 hover:bg-slate-100 text-slate-600 border border-slate-200 rounded-xl text-xs font-bold flex items-center gap-2 transition-all active:scale-95 h-[40px]"
                 >
                   <Icon icon="solar:checklist-minimalistic-outline" className="w-3.5 h-3.5" />
                   History
@@ -389,15 +409,12 @@ export default function App() {
                   onClick={() => handleCompleteMicro(micro)}
                   className="relative p-5 bg-slate-50 border border-slate-100 rounded-2xl flex flex-col items-center text-center gap-2 transition-colors shadow-sm group/card cursor-pointer hover:border-emerald-200 hover:bg-emerald-100/60 overflow-hidden h-[120px] justify-center animate-in zoom-in-95"
                 >
-                  {/* Stable Icon Container */}
                   <div className="relative h-10 w-10 flex items-center justify-center flex-shrink-0 transition-transform duration-200 group-hover/card:scale-110">
                     <div className="opacity-100 group-hover/card:opacity-0 transition-opacity duration-200 text-3xl">
                       {micro.icon.includes('solar:') ? <Icon icon={micro.icon} className="w-8 h-8 text-slate-600" /> : micro.icon}
                     </div>
                     <Icon icon="solar:check-circle-outline" className="absolute w-8 h-8 text-emerald-600 opacity-0 group-hover/card:opacity-100 transition-opacity duration-200" />
                   </div>
-                  
-                  {/* Stable Text Container to avoid layout shift */}
                   <div className="h-4 relative w-full">
                     <span className="absolute inset-0 text-[10px] font-bold leading-tight text-slate-600 opacity-100 group-hover/card:opacity-0 transition-opacity duration-200 truncate px-2">
                       {micro.text}
@@ -435,20 +452,29 @@ export default function App() {
                   <p className="text-[10px] font-bold text-slate-400 mt-1 uppercase tracking-wide">Daily Cognitive Path</p>
                 )}
               </div>
-              <button 
-                onClick={syncEverything} 
-                disabled={isSyncing} 
-                className={PRIMARY_SYNC_BUTTON_CLASSES}
-              >
-                <Icon icon="solar:refresh-outline" className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-                Sync Flow
-              </button>
+              <div className="flex items-center gap-3">
+                <button 
+                  onClick={() => setIsScheduleHistoryOpen(true)} 
+                  className="px-4 py-2 bg-slate-50 hover:bg-slate-100 text-slate-600 border border-slate-200 rounded-xl text-xs font-bold flex items-center gap-2 transition-all active:scale-95 h-[40px]"
+                >
+                  <Icon icon="solar:checklist-minimalistic-outline" className="w-3.5 h-3.5" />
+                  History
+                </button>
+                <button 
+                  onClick={syncEverything} 
+                  disabled={isSyncing} 
+                  className={PRIMARY_SYNC_BUTTON_CLASSES}
+                >
+                  <Icon icon="solar:refresh-outline" className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                  Sync Flow
+                </button>
+              </div>
             </div>
             <div ref={scrollContainerRef} className="p-8 space-y-6 max-h-[750px] overflow-y-auto custom-scrollbar scroll-smooth relative bg-slate-50/10">
-              {schedule.length > 0 ? (
+              {visibleSchedule.length > 0 ? (
                 <div className="relative space-y-8 before:absolute before:left-[70px] before:top-4 before:bottom-4 before:w-[2px] before:bg-slate-200">
-                  {schedule.map((item, idx) => {
-                    const isActive = idx === currentTaskIndex;
+                  {visibleSchedule.map((item, idx) => {
+                    const isActive = idx === 0 && currentTaskIndex !== -1;
                     const isBusy = item.type.toLowerCase() === 'busy';
                     return (
                       <div key={idx} ref={isActive ? activeTaskRef : null} className={`flex items-center gap-8 group transition-all duration-500 ${isActive ? 'scale-[1.02] z-10 relative' : 'opacity-60 grayscale-[0.3] hover:opacity-100 hover:grayscale-0'}`}>
@@ -747,7 +773,7 @@ export default function App() {
         </div>
       )}
 
-      {/* History Modal */}
+      {/* Micro Activity History Modal */}
       {isHistoryModalOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-slate-900/60 backdrop-blur-md animate-in fade-in">
           <div className="bg-white w-full max-w-lg rounded-[48px] p-10 shadow-2xl flex flex-col max-h-[80vh]" role="dialog" aria-labelledby="modal-history-title">
@@ -773,6 +799,37 @@ export default function App() {
               )}
             </div>
             <button onClick={() => setIsHistoryModalOpen(false)} className={STANDARD_CLOSE_BUTTON_CLASSES}>Close History</button>
+          </div>
+        </div>
+      )}
+
+      {/* Schedule History Modal */}
+      {isScheduleHistoryOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-slate-900/60 backdrop-blur-md animate-in fade-in">
+          <div className="bg-white w-full max-w-lg rounded-[48px] p-10 shadow-2xl flex flex-col max-h-[80vh]" role="dialog" aria-labelledby="modal-schedule-history-title">
+            <div className="flex justify-between items-center mb-8">
+              <div>
+                <h3 id="modal-schedule-history-title" className="text-3xl font-black text-slate-900 tracking-tighter">Schedule History</h3>
+                <p className="text-sm text-slate-500 font-medium">Past items from today's cognitive path</p>
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto custom-scrollbar space-y-4">
+              {pastSchedule.length > 0 ? pastSchedule.map((item, idx) => (
+                <div key={idx} className="flex items-center gap-5 p-4 bg-slate-50 border border-slate-100 rounded-2xl animate-in fade-in slide-in-from-left-2">
+                  <div className="w-12 h-12 rounded-xl bg-white border border-slate-200 flex items-center justify-center flex-shrink-0 text-slate-400">
+                    <Icon icon={item.icon} className="w-6 h-6" />
+                  </div>
+                  <div className="flex-1">
+                    <p className="font-bold text-slate-800 text-sm">{item.title}</p>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">{item.time} • {item.type}</p>
+                  </div>
+                  <Icon icon="solar:check-circle-outline" className="w-6 h-6 text-emerald-500" />
+                </div>
+              )) : (
+                <div className="text-center py-20 bg-slate-50 border border-slate-100 rounded-[32px] text-slate-400 text-sm font-medium italic">Your daily journey is just beginning.</div>
+              )}
+            </div>
+            <button onClick={() => setIsScheduleHistoryOpen(false)} className={STANDARD_CLOSE_BUTTON_CLASSES}>Close History</button>
           </div>
         </div>
       )}
