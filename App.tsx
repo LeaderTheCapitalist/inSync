@@ -22,6 +22,7 @@ interface DoneItem {
   text: string;
   icon: string;
   timestamp: string;
+  unixTimestamp: number;
 }
 
 interface GrowthResponse {
@@ -158,17 +159,15 @@ export default function App() {
     return activeIdx;
   }, [schedule, currentTime]);
 
-  // Derived schedules
   const visibleSchedule = useMemo(() => {
     if (schedule.length === 0) return [];
     if (currentTaskIndex === -1) return schedule;
-    // Show current task and everything after it
     return schedule.slice(currentTaskIndex);
   }, [schedule, currentTaskIndex]);
 
   const pastSchedule = useMemo(() => {
     if (schedule.length === 0 || currentTaskIndex === -1) return [];
-    // Everything before the current task, reversed to show newest (most recent past) first
+    // Sorted chronological items into reverse order (newest first)
     return [...schedule.slice(0, currentTaskIndex)].reverse();
   }, [schedule, currentTaskIndex]);
 
@@ -179,7 +178,7 @@ export default function App() {
     const totalHeat = activities.reduce((acc, curr) => {
       return acc + (difficultyWeight[curr.difficulty] || 0) + (priorityWeight[curr.priority] || 0);
     }, 0);
-    if (totalHeat < 5) return { label: 'Chill', color: 'text-sky-500', bg: 'bg-sky-50' };
+    if (totalHeat < 5) return { label: 'Chill', color: 'text-sky-500', bg: 'bg-slate-100' };
     if (totalHeat < 9) return { label: 'Casual', color: 'text-emerald-500', bg: 'bg-emerald-50' };
     if (totalHeat < 14) return { label: 'Normal', color: 'text-indigo-500', bg: 'bg-indigo-50' };
     if (totalHeat < 20) return { label: 'Busy', color: 'text-amber-500', bg: 'bg-amber-50' };
@@ -189,7 +188,7 @@ export default function App() {
   const handleAddActivity = () => {
     if (!formTitle.trim()) return;
     const newAct: Activity = {
-      id: Math.random().toString(36).substr(2, 9),
+      id: crypto.randomUUID(),
       title: toTitleCase(formTitle.trim()),
       category: formCategory,
       priority: formPriority,
@@ -203,7 +202,7 @@ export default function App() {
   const handleAddTimeframe = () => {
     if (!tfTitle.trim()) return;
     const newTf: Timeframe = {
-      id: Math.random().toString(36).substr(2, 9),
+      id: crypto.randomUUID(),
       title: toTitleCase(tfTitle.trim()),
       startTime: tfStart,
       endTime: tfEnd,
@@ -229,21 +228,17 @@ export default function App() {
   };
 
   const handleCompleteMicro = (micro: MicroActivity) => {
-    // Robust multi-step removal to handle potential ID collisions (though service now fixes them)
-    // and prevent race conditions or duplicate processing.
-    setMicroActivities(prev => {
-      const exists = prev.find(m => m.id === micro.id);
-      if (!exists) return prev;
-
-      const newItem: DoneItem = {
+    setMicroActivities(prev => prev.filter(m => m.id !== micro.id));
+    setDoneItems(prev => [
+      {
         id: micro.id,
         text: micro.text,
         icon: micro.icon,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      };
-      setDoneItems(d => [newItem, ...d]);
-      return prev.filter(m => m.id !== micro.id);
-    });
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        unixTimestamp: Date.now()
+      },
+      ...prev
+    ]);
   };
 
   const handleGrowthQuery = useCallback(async () => {
@@ -279,6 +274,14 @@ export default function App() {
       case 'Personal': return 'solar:user-circle-outline';
       default: return 'solar:circle-outline';
     }
+  };
+
+  const renderScheduleIcon = (item: ScheduleItem, isActive: boolean, isBusy: boolean) => {
+    const isEmoji = !item.icon?.includes('solar:');
+    if (isEmoji && item.icon) {
+      return <span className="text-xl">{item.icon}</span>;
+    }
+    return <Icon icon={item.icon || (isBusy ? 'solar:forbidden-circle-outline' : 'solar:star-outline')} className="w-5 h-5" />;
   };
 
   const STANDARD_CLOSE_BUTTON_CLASSES = "mt-8 py-4 bg-slate-50 hover:bg-slate-100 text-slate-600 rounded-2xl font-bold transition-all shadow-sm active:scale-95";
@@ -407,19 +410,19 @@ export default function App() {
                 <div 
                   key={micro.id} 
                   onClick={() => handleCompleteMicro(micro)}
-                  className="relative p-5 bg-slate-50 border border-slate-100 rounded-2xl flex flex-col items-center text-center gap-2 transition-colors shadow-sm group/card cursor-pointer hover:border-emerald-200 hover:bg-emerald-100/60 overflow-hidden h-[120px] justify-center animate-in zoom-in-95"
+                  className="relative p-5 bg-slate-50 border border-slate-100 rounded-2xl flex flex-col items-center text-center gap-2 transition-colors shadow-sm group/card cursor-pointer hover:border-emerald-200 hover:bg-emerald-100/60 overflow-hidden min-h-[140px] justify-center animate-in zoom-in-95"
                 >
-                  <div className="relative h-10 w-10 flex items-center justify-center flex-shrink-0 transition-transform duration-200 group-hover/card:scale-110">
+                  <div className="relative h-10 w-10 flex items-center justify-center flex-shrink-0 transition-transform duration-200 group-hover/card:scale-110 mb-2">
                     <div className="opacity-100 group-hover/card:opacity-0 transition-opacity duration-200 text-3xl">
                       {micro.icon.includes('solar:') ? <Icon icon={micro.icon} className="w-8 h-8 text-slate-600" /> : micro.icon}
                     </div>
                     <Icon icon="solar:check-circle-outline" className="absolute w-8 h-8 text-emerald-600 opacity-0 group-hover/card:opacity-100 transition-opacity duration-200" />
                   </div>
-                  <div className="h-4 relative w-full">
-                    <span className="absolute inset-0 text-[10px] font-bold leading-tight text-slate-600 opacity-100 group-hover/card:opacity-0 transition-opacity duration-200 truncate px-2">
+                  <div className="relative w-full">
+                    <span className="text-[10px] font-bold leading-tight text-slate-600 opacity-100 group-hover/card:opacity-0 transition-opacity duration-200 px-1 block break-words">
                       {micro.text}
                     </span>
-                    <span className="absolute inset-0 text-[10px] font-black text-emerald-700 tracking-wide opacity-0 group-hover/card:opacity-100 transition-opacity duration-200">
+                    <span className="absolute inset-0 flex items-center justify-center text-[10px] font-black text-emerald-700 tracking-wide opacity-0 group-hover/card:opacity-100 transition-opacity duration-200">
                       Done
                     </span>
                   </div>
@@ -446,7 +449,7 @@ export default function App() {
                 ) : currentTaskIndex !== -1 ? (
                   <p className="text-[10px] font-bold text-indigo-500 mt-1 flex items-center gap-1.5">
                     <Icon icon="solar:play-circle-outline" className="w-3 h-3 animate-pulse" />
-                    Focusing: {schedule[currentTaskIndex].title}
+                    Focusing: {schedule[currentTaskIndex]?.title}
                   </p>
                 ) : (
                   <p className="text-[10px] font-bold text-slate-400 mt-1 uppercase tracking-wide">Daily Cognitive Path</p>
@@ -477,14 +480,14 @@ export default function App() {
                     const isActive = idx === 0 && currentTaskIndex !== -1;
                     const isBusy = item.type.toLowerCase() === 'busy';
                     return (
-                      <div key={idx} ref={isActive ? activeTaskRef : null} className={`flex items-center gap-8 group transition-all duration-500 ${isActive ? 'scale-[1.02] z-10 relative' : 'opacity-60 grayscale-[0.3] hover:opacity-100 hover:grayscale-0'}`}>
+                      <div key={`${idx}-${item.time}`} ref={isActive ? activeTaskRef : null} className={`flex items-center gap-8 group transition-all duration-500 ${isActive ? 'scale-[1.02] z-10 relative' : 'opacity-60 grayscale-[0.3] hover:opacity-100 hover:grayscale-0'}`}>
                         <div className="w-16 text-right flex-shrink-0">
                           <span className={`text-[11px] font-black font-mono tracking-tighter ${isActive ? 'text-indigo-600' : 'text-slate-400'}`}>
                             {item.time}
                           </span>
                         </div>
                         <div className={`relative z-10 w-8 h-8 rounded-xl bg-white border transition-all flex items-center justify-center flex-shrink-0 shadow-sm ${isActive ? 'border-indigo-600 ring-4 ring-indigo-50 text-indigo-600' : isBusy ? 'border-amber-200 text-amber-500 bg-amber-50' : 'border-slate-200 text-slate-400'}`}>
-                           <Icon icon={item.icon || (isBusy ? 'solar:forbidden-circle-outline' : 'solar:star-outline')} className="w-5 h-5" />
+                           {renderScheduleIcon(item, isActive, isBusy)}
                         </div>
                         <div className={`flex-1 p-6 rounded-[32px] border transition-all bg-white border-slate-200 ${isActive ? 'ring-2 ring-indigo-600 shadow-2xl shadow-indigo-100/50 -translate-x-1' : isBusy ? 'bg-amber-50/20 border-amber-100' : 'hover:border-slate-300'}`}>
                           <div className="flex justify-between items-start mb-2">
@@ -785,8 +788,8 @@ export default function App() {
               <button onClick={() => setDoneItems([])} aria-label="Clear History" className="text-[10px] font-bold text-rose-500 flex items-center gap-1 hover:bg-rose-50 px-2 py-1 rounded-lg transition-colors"><Icon icon="solar:trash-bin-trash-outline" /> Clear All</button>
             </div>
             <div className="flex-1 overflow-y-auto custom-scrollbar space-y-4">
-              {doneItems.length > 0 ? doneItems.map((item, idx) => (
-                <div key={idx} className="flex items-center gap-5 p-4 bg-slate-50 border border-slate-100 rounded-2xl animate-in fade-in slide-in-from-left-2" style={{ animationDelay: `${idx * 50}ms` }}>
+              {doneItems.length > 0 ? doneItems.map((item) => (
+                <div key={item.id} className="flex items-center gap-5 p-4 bg-slate-50 border border-slate-100 rounded-2xl animate-in fade-in slide-in-from-left-2">
                   <span className="text-2xl">{item.icon}</span>
                   <div className="flex-1">
                     <p className="font-bold text-slate-800 text-sm">{item.text}</p>
@@ -815,9 +818,9 @@ export default function App() {
             </div>
             <div className="flex-1 overflow-y-auto custom-scrollbar space-y-4">
               {pastSchedule.length > 0 ? pastSchedule.map((item, idx) => (
-                <div key={idx} className="flex items-center gap-5 p-4 bg-slate-50 border border-slate-100 rounded-2xl animate-in fade-in slide-in-from-left-2">
+                <div key={`${idx}-${item.time}`} className="flex items-center gap-5 p-4 bg-slate-50 border border-slate-100 rounded-2xl animate-in fade-in slide-in-from-left-2" style={{ animationDelay: `${idx * 50}ms` }}>
                   <div className="w-12 h-12 rounded-xl bg-white border border-slate-200 flex items-center justify-center flex-shrink-0 text-slate-400">
-                    <Icon icon={item.icon} className="w-6 h-6" />
+                    {renderScheduleIcon(item, false, item.type.toLowerCase() === 'busy')}
                   </div>
                   <div className="flex-1">
                     <p className="font-bold text-slate-800 text-sm">{item.title}</p>
